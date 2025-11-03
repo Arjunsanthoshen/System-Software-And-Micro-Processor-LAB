@@ -1,151 +1,78 @@
-#include <stdio.h>
-#include <stdlib.h>
+#include <stdio.h>  
+#include <stdlib.h> 
 #include <string.h>
-#include <ctype.h>
-
-void trim(char *str) {
-    int i = 0, j = 0;
-    while (isspace((unsigned char)str[i])) i++;  
-    while (str[i]) str[j++] = str[i++];
-    str[j] = '\0';
-    while (j > 0 && isspace((unsigned char)str[j - 1])) str[--j] = '\0';
-}
 
 int main() {
-    char label[20], opcode[20], operand[20];
-    char code[20], mnemonic[20];
-    char symbol[20], address[20];
-    char line[100], objcode[50];
-    int loc, startAddr = 0, progLen = 0;
-    char progName[20] = "";
-
-    FILE *intermediate = fopen("output.txt", "r");
-    FILE *optab = fopen("optab.txt", "r");
-    FILE *symtab = fopen("symtab.txt", "r");
-    FILE *codeFile = fopen("code.txt", "w");
-    FILE *programFile = fopen("program.txt", "w");
+    char label[20], opcode[20], operand[20],code[20], mnemonic[20];
+    char symbol[20], address[20],line[100], objcode[7],progName[7] = "", textRecord[100] = "";
+    int locctr, startAddr = 0, progLen, firstTextAddr = -1, textLen = 0;
+   
+    FILE *intermediate = fopen("intermediate.txt", "r"), *optab = fopen("optab.txt", "r"), *symtab = fopen("symtab.txt", "r");
+    FILE *codeFile = fopen("code.txt", "w"), *programFile = fopen("program.txt", "w");
 
     if (!intermediate || !optab || !symtab || !codeFile || !programFile) {
         printf("Error opening files.\n");
         return 1;
     }
 
-    if (!fgets(line, sizeof(line), intermediate)) {
-        printf("Error: empty intermediate file.\n");
-        return 1;
-    }
-
-    sscanf(line, "%s %s %X", label, opcode, &startAddr);
-    if (strcmp(opcode, "START") == 0) {
+    fgets(line, sizeof(line), intermediate);  // read from intermediate to buffer line
+    sscanf(line, "%s %s %s", label, opcode, operand); // line is then parsed to get the values
+    
+    if (strcmp(opcode, "START") == 0) { 
+        startAddr = (int)strtol(operand, NULL, 16); // convert hex string to integer
         strcpy(progName, label);
-        trim(progName);
-        fprintf(codeFile, "%06X  %-10s %-10s %-10X %-10s\n",
-                startAddr, label, opcode, startAddr, "**");
     }
+    
+    while (fgets(line, sizeof(line), intermediate)) { // read each line from intermediate till EOF
+        sscanf(line, "%X %s %s %s", &locctr, label, opcode, operand);
 
-    int lastAddr = startAddr;
-    while (fgets(line, sizeof(line), intermediate)) {
-        int tmpAddr;
-        char tmpLabel[20], tmpOpcode[20], tmpOperand[20];
-        sscanf(line, "%X %s %s %s", &tmpAddr, tmpLabel, tmpOpcode, tmpOperand);
-        lastAddr = tmpAddr;
-    }
-    progLen = lastAddr - startAddr;
+        if (strcmp(opcode, "END") == 0) break;
 
-    fseek(intermediate, 0, SEEK_SET);
-    fgets(line, sizeof(line), intermediate);
+        if (firstTextAddr == -1) firstTextAddr = locctr;        // record the address of first text record
 
-    fprintf(programFile, "H^%s^%06X^%06X\n", progName, startAddr, progLen);
-
-    char textRecord[2000] = "";
-    int textLen = 0;
-
-    while (fgets(line, sizeof(line), intermediate)) {
-        sscanf(line, "%X %s %s %s", &loc, label, opcode, operand);
-
-        if (strcmp(opcode, "END") == 0) {
-            fprintf(codeFile, "%06X  %-10s %-10s %-10s %-10s\n",
-                    loc, label, opcode, "**", "**");
-            break;
-        }
-
-        int found = 0;
-        rewind(optab);
+        // --- Generate object code  ---
+        int opfound = 0, symFound = 0; // opcode and symbol found flag 
+        rewind(optab); // set file pointer back to start of the file as it would change with the while loop below
         while (fscanf(optab, "%s %s", code, mnemonic) != EOF) {
-            if (strcmp(opcode, code) == 0) {
+            if (strcmp(opcode, code) == 0) { // if opcode of intermediate is in optab 
+                opfound = 1; // opcode opfound in optab 
                 rewind(symtab);
-                int symFound = 0;
                 while (fscanf(symtab, "%s %s", symbol, address) != EOF) {
-                    if (strcmp(operand, symbol) == 0) {
-                        snprintf(objcode, sizeof(objcode), "%s%s", mnemonic, address);
-                        symFound = 1;
+                    if (strcmp(operand, symbol) == 0) { // operand can have ALPHA,BETA,etc.
+                        symFound = 1; // symbol found in symtab
+                        sprintf(objcode, "%s%s", mnemonic, address); // concatenate mnemonic and address to object code array 
                         break;
                     }
                 }
-                if (!symFound) snprintf(objcode, sizeof(objcode), "%s0000", mnemonic);
-                found = 1;
+                if (!symFound) sprintf(objcode, "%s0000", mnemonic); // if symbol not found in symtab, use 0000 as address
                 break;
             }
         }
 
-        if (found) {
-            snprintf(textRecord + strlen(textRecord),
-                     sizeof(textRecord) - strlen(textRecord),
-                     "^%s", objcode);
+        // --- Add to textRecord + codeFile ---
+        if (opfound) { textLen += 3; }  // if opcode found in optab
+        else if (strcmp(opcode, "WORD") == 0) {  // if opcode is WORD
+            sprintf(objcode, "%06X", atoi(operand));
             textLen += 3;
-            fprintf(codeFile, "%06X  %-10s %-10s %-10s %-10s\n",
-                    loc, label, opcode, operand, objcode);
-        }
-        else if (strcmp(opcode, "WORD") == 0) {
-            snprintf(objcode, sizeof(objcode), "%06X", atoi(operand));
-            snprintf(textRecord + strlen(textRecord),
-                     sizeof(textRecord) - strlen(textRecord),
-                     "^%s", objcode);
-            textLen += 3;
-            fprintf(codeFile, "%06X  %-10s %-10s %-10s %-10s\n",
-                    loc, label, opcode, operand, objcode);
         }
         else if (strcmp(opcode, "BYTE") == 0) {
-            char hex[50] = "";
-            if (operand[0] == 'C') {
-                for (int i = 2; operand[i] != '\''; i++) {
-                    char temp[5];
-                    snprintf(temp, sizeof(temp), "%02X", operand[i]);
-                    strcat(hex, temp);
-                }
-            }
-            else if (operand[0] == 'X') {
-                for (int i = 2; operand[i] != '\''; i++) {
-                    char temp[2] = {operand[i], '\0'};
-                    strcat(hex, temp);
-                }
-            }
-            strncpy(objcode, hex, sizeof(objcode));
-            objcode[sizeof(objcode) - 1] = '\0';
-
-            snprintf(textRecord + strlen(textRecord),
-                     sizeof(textRecord) - strlen(textRecord),
-                     "^%s", objcode);
-            textLen += strlen(hex) / 2;
-
-            fprintf(codeFile, "%06X  %-10s %-10s %-10s %-10s\n",
-                    loc, label, opcode, operand, objcode);
+            strcpy(objcode, "");
+            for (int i = 2; operand[i] != '\''; i++) // i = 2 because we want to skip C and single quote ' , eg C'EOF', go till next single quote (\')
+                sprintf(objcode + strlen(objcode),(operand[0] == 'C') ? "%02X" : "%c", operand[i]); // if C, use %02X (to convert to hex ) , else if 'X' %c (just write)
+            textLen += strlen(objcode) / 2;
         }
-        else if (strcmp(opcode, "RESW") == 0 || strcmp(opcode, "RESB") == 0) {
-            fprintf(codeFile, "%06X  %-10s %-10s %-10s %-10s\n",
-                    loc, label, opcode, operand, "**");
-        }
+        else continue; // skip if none matched (e.g., RESW/RESB)
+
+        sprintf(textRecord + strlen(textRecord), "^%s", objcode); // append object code to text record
+        fprintf(codeFile, "%06X\t%s\t%s\t%s\t%s\n",locctr, label, opcode, operand, objcode); // write to code file
     }
 
-    fprintf(programFile, "T^%06X^%02X%s\n", startAddr, textLen, textRecord);
-    fprintf(programFile, "E^%06X\n", startAddr);
+    progLen = locctr - startAddr;
+    fprintf(programFile, "H^%-6s^%06X^%06X\n", progName, startAddr, progLen);     // Header record
+    fprintf(programFile, "T^%06X^%02X%s\n", firstTextAddr, textLen, textRecord); // Text record
+    fprintf(programFile, "E^%06X\n", startAddr);                                // End record
 
-    fclose(intermediate);
-    fclose(optab);
-    fclose(symtab);
-    fclose(codeFile);
-    fclose(programFile);
-
-    printf("Pass Two completed successfully.\n");
+    fclose(intermediate), fclose(optab), fclose(symtab), fclose(codeFile), fclose(programFile);
+    printf("<< Pass Two completed >>\n");
     return 0;
-}
+} // best of luck !
